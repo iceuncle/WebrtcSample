@@ -1,11 +1,23 @@
 'use strict'
 
+//devices
 var audioSource  = document.querySelector("select#audioSource");
 var audioOutput  = document.querySelector("select#audioOutput");
 var videoSource  = document.querySelector("select#videoSource");
-var videoplay  = document.querySelector("video#player");
 
+//filter
 var filtersSelect = document.querySelector('select#filter');
+
+var snapshot = document.querySelector('button#snapshot');
+var picture = document.querySelector('canvas#picture');
+picture.width = 320;
+picture.height = 240;
+
+//videplay
+var videoplay  = document.querySelector("video#player");
+// var audioplay  = document.querySelector("audio#audioplayer");
+
+var divConstraints = document.querySelector('div#constraints')
 
 function gotDevices(deviceInfos) {
 
@@ -30,6 +42,13 @@ function gotDevices(deviceInfos) {
 
 function gotMediaStream(stream) {
 	videoplay.srcObject = stream;
+	// audioplay.srcObject = stream;
+
+	var videoTrack = stream.getVideoTracks()[0];
+	var videoConstraints = videoTrack.getSettings();
+
+	divConstraints.textContent = JSON.stringify(videoConstraints, null, 2);
+
 	return navigator.mediaDevices.enumerateDevices();
 }
 
@@ -41,7 +60,7 @@ function start() {
 	if(!navigator.mediaDevices ||
 		!navigator.mediaDevices.getUserMedia){
 		console.log('getUserMedia is not supported!');
-	}else {
+	} else {
 		var deviceId = videoSource.value;
 		var constraints = {
 			video : {
@@ -51,10 +70,12 @@ function start() {
 				facingMode: 'environment',
 				deviceId : deviceId ? deviceId : undefined
 			},
-			audio : {
-				noiseSuppression: true,
-				echoCancellation: true
-			}
+			audio : false
+			// video: false,
+			// audio : {
+			// 	noiseSuppression: true,
+			// 	echoCancellation: true
+			// }
 		}
 		navigator.mediaDevices.getUserMedia(constraints)
 							.then(gotMediaStream)
@@ -71,4 +92,11 @@ filtersSelect.onchange = function() {
 	videoplay.className = filtersSelect.value;
 }
 
+
+snapshot.onclick = function() {
+	picture.getContext('2d').drawImage(videoplay, 
+										0, 0,
+										picture.width,
+										picture.height);
+}
 
