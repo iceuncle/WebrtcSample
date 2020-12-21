@@ -10,7 +10,7 @@ var filtersSelect = document.querySelector('select#filter');
 
 var snapshot = document.querySelector('button#snapshot');
 var picture = document.querySelector('canvas#picture');
-picture.width = 320;
+picture.width = 320; 
 picture.height = 240;
 
 //videplay
