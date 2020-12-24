@@ -6,12 +6,15 @@ var remoteVideo = document.querySelector('video#remotevideo');
 var btnConn =  document.querySelector('button#connserver');
 var btnLeave = document.querySelector('button#leave');
 
-var offer = document.querySelector('textarea#offer');
-var answer = document.querySelector('textarea#answer');
+var optBw = document.querySelector('select#bandwidth');
 
-var shareDeskBox  = document.querySelector('input#shareDesk');
+var bitrateGraph;
+var bitrateSeries;
 
-var bandwidth = document.querySelector('select#bandwidth');
+var packetGraph;
+var packetSeries;
+
+var lastResult;
 
 var pcConfig = {
   'iceServers': [{
@@ -96,6 +99,7 @@ function conn(){
 
 		btnConn.disabled = false;
 		btnLeave.disabled = true;
+		optBw.disabled = true;
 	});
 
 	socket.on('bye', (room, id) => {
@@ -119,6 +123,10 @@ function conn(){
 
 		}
 		state = 'leaved';
+
+		btnConn.disabled = false;
+		btnLeave.disabled = true;
+		optBw.disabled = true;
 	
 	});
 
@@ -139,8 +147,8 @@ function conn(){
 				.catch(handleAnswerError);
 
 		}else if(data.hasOwnProperty('type') && data.type === 'answer'){
+			optBw.disabled = false
 			pc.setRemoteDescription(new RTCSessionDescription(data));
-			bandwidth.disabled = false;
 		
 		}else if (data.hasOwnProperty('type') && data.type === 'candidate'){
 			var candidate = new RTCIceCandidate({
@@ -188,6 +196,14 @@ function getMediaStream(stream){
 	
 	//setup connection
 	conn();
+
+	bitrateSeries = new TimelineDataSeries();
+	bitrateGraph = new TimelineGraphView('bitrateGraph', 'bitrateCanvas');
+	bitrateGraph.updateEndDate();
+
+	packetSeries = new TimelineDataSeries();
+	packetGraph = new TimelineGraphView('packetGraph', 'packetCanvas');
+	packetGraph.updateEndDate();
 }
 
 function getDeskStream(stream){
@@ -247,8 +263,8 @@ function handleAnswerError(err){
 
 function getAnswer(desc){
 	pc.setLocalDescription(desc);
-	bandwidth.disabled = false;
 
+	optBw.disabled = false;
 	//send answer sdp
 	sendMessage(roomid, desc);
 }
@@ -363,88 +379,86 @@ function leave() {
 
 	btnConn.disabled = false;
 	btnLeave.disabled = true;
-	bandwidth.disabled = true;
+	optBw.disabled = true;
 }
 
-function change_bw(){
-	bandwidth.disabled = true;
-	var bw = bandwidth.options[bandwidth.selectedIndex].value;
+function chang_bw()
+{
+	optBw.disabled = true;
+	var bw = optBw.options[optBw.selectedIndex].value;
 
 	var vsender = null;
 	var senders = pc.getSenders();
 
-	senders.forEach(sender => {
+	senders.forEach( sender => {
 		if(sender && sender.track.kind === 'video'){
-			vsender = sender;
-		}
+			vsender = sender;	
+		}	
 	});
 
 	var parameters = vsender.getParameters();
-	
 	if(!parameters.encodings){
-		parameters.encodings=[{}];	
+		return;	
 	}
 
 	if(bw === 'unlimited'){
-		delete parameters.encodings[0].maxBitrate;
-	}else{
-		parameters.encodings[0].maxBitrate = bw * 1000;	
+		return;	
 	}
+
+	parameters.encodings[0].maxBitrate = bw * 1000;
 
 	vsender.setParameters(parameters)
 		.then(()=>{
-			bandwidth.disabled = false;	
+			optBw.disabled = false;
+			console.log('Successed to set parameters!');
 		})
 		.catch(err => {
-			console.error(err)
-		});
-
-	return;
+			console.error(err);
+		})
 }
 
 // query getStats every second
-// window.setInterval(() => {
-//   if (!pc1) {
-//     return;
-//   }
-//   const sender = pc1.getSenders()[0];
-//   if (!sender) {
-//     return;
-//   }
-//   sender.getStats().then(res => {
-//     res.forEach(report => {
-//       let bytes;
-//       let packets;
-//       if (report.type === 'outbound-rtp') {
-//         if (report.isRemote) {
-//           return;
-//         }
-//         const now = report.timestamp;
-//         bytes = report.bytesSent;
-//         packets = report.packetsSent;
-//         if (lastResult && lastResult.has(report.id)) {
-//           // calculate bitrate
-//           const bitrate = 8 * (bytes - lastResult.get(report.id).bytesSent) /
-//             (now - lastResult.get(report.id).timestamp);
+window.setInterval(() => {
+  if (!pc) {
+    return;
+  }
+  const sender = pc.getSenders()[0];
+  if (!sender) {
+    return;
+  }
+  sender.getStats().then(res => {
+    res.forEach(report => {
+      let bytes;
+      let packets;
+      if (report.type === 'outbound-rtp') {
+        if (report.isRemote) {
+          return;
+        }
+        const now = report.timestamp;
+        bytes = report.bytesSent;
+        packets = report.packetsSent;
+        if (lastResult && lastResult.has(report.id)) {
+          // calculate bitrate
+          const bitrate = 8 * (bytes - lastResult.get(report.id).bytesSent) /
+            (now - lastResult.get(report.id).timestamp);
 
-//           // append to chart
-//           bitrateSeries.addPoint(now, bitrate);
-//           bitrateGraph.setDataSeries([bitrateSeries]);
-//           bitrateGraph.updateEndDate();
+          // append to chart
+          bitrateSeries.addPoint(now, bitrate);
+          bitrateGraph.setDataSeries([bitrateSeries]);
+          bitrateGraph.updateEndDate();
 
-//           // calculate number of packets and append to chart
-//           packetSeries.addPoint(now, packets -
-//             lastResult.get(report.id).packetsSent);
-//           packetGraph.setDataSeries([packetSeries]);
-//           packetGraph.updateEndDate();
-//         }
-//       }
-//     });
-//     lastResult = res;
-//   });
-// }, 1000);
-
+          // calculate number of packets and append to chart
+          packetSeries.addPoint(now, packets -
+            lastResult.get(report.id).packetsSent);
+          packetGraph.setDataSeries([packetSeries]);
+          packetGraph.updateEndDate();
+        }
+      }
+    });
+    lastResult = res;
+  });
+}, 1000);
 
 btnConn.onclick = connSignalServer
 btnLeave.onclick = leave;
-bandwidth.onchange = change_bw;
+optBw.onchange = chang_bw;

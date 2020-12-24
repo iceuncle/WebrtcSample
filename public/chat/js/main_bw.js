@@ -6,12 +6,19 @@ var remoteVideo = document.querySelector('video#remotevideo');
 var btnConn =  document.querySelector('button#connserver');
 var btnLeave = document.querySelector('button#leave');
 
-var offer = document.querySelector('textarea#offer');
-var answer = document.querySelector('textarea#answer');
+var optBw = document.querySelector('select#bandwidth');
 
-var shareDeskBox  = document.querySelector('input#shareDesk');
+var chat = document.querySelector('textarea#chat');
+var send_txt = document.querySelector('textarea#sendtxt');
+var btnSend = document.querySelector('button#send');
 
-var bandwidth = document.querySelector('select#bandwidth');
+var bitrateGraph;
+var bitrateSeries;
+
+var packetGraph;
+var packetSeries;
+
+var lastResult;
 
 var pcConfig = {
   'iceServers': [{
@@ -25,12 +32,15 @@ var localStream = null;
 var remoteStream = null;
 
 var pc = null;
+var dc = null;
 
 var roomid;
 var socket = null;
 
 var offerdesc = null;
 var state = 'init';
+
+
 
 function sendMessage(roomid, data){
 
@@ -39,6 +49,18 @@ function sendMessage(roomid, data){
 		console.log('socket is null');
 	}
 	socket.emit('message', roomid, data);
+}
+
+function dataChannelStateChange() {
+  var readyState = dc.readyState;
+  console.log('Send channel state is: ' + readyState);
+  if (readyState === 'open') {
+    send_txt.disabled = false;
+    send.disabled = false;
+  } else {
+    send_txt.disabled = true;
+    send.disabled = true;
+  }
 }
 
 function conn(){
@@ -59,6 +81,7 @@ function conn(){
 
 		btnConn.disabled = true;
 		btnLeave.disabled = false;
+
 		console.log('receive joined message, state=', state);
 	});
 
@@ -71,6 +94,12 @@ function conn(){
 			createPeerConnection();
 			bindTracks();
 		}
+
+		//create data channel for transporting non-audio/video data
+		dc = pc.createDataChannel('chatchannel');
+		dc.onmessage = receivemsg;
+		dc.onopen = dataChannelStateChange;
+		dc.onclose = dataChannelStateChange;
 
 		state = 'joined_conn';
 		call();
@@ -96,6 +125,7 @@ function conn(){
 
 		btnConn.disabled = false;
 		btnLeave.disabled = true;
+		optBw.disabled = true;
 	});
 
 	socket.on('bye', (room, id) => {
@@ -119,6 +149,10 @@ function conn(){
 
 		}
 		state = 'leaved';
+
+		btnConn.disabled = false;
+		btnLeave.disabled = true;
+		optBw.disabled = true;
 	
 	});
 
@@ -139,8 +173,8 @@ function conn(){
 				.catch(handleAnswerError);
 
 		}else if(data.hasOwnProperty('type') && data.type === 'answer'){
+			optBw.disabled = false
 			pc.setRemoteDescription(new RTCSessionDescription(data));
-			bandwidth.disabled = false;
 		
 		}else if (data.hasOwnProperty('type') && data.type === 'candidate'){
 			var candidate = new RTCIceCandidate({
@@ -188,6 +222,14 @@ function getMediaStream(stream){
 	
 	//setup connection
 	conn();
+
+	bitrateSeries = new TimelineDataSeries();
+	bitrateGraph = new TimelineGraphView('bitrateGraph', 'bitrateCanvas');
+	bitrateGraph.updateEndDate();
+
+	packetSeries = new TimelineDataSeries();
+	packetGraph = new TimelineGraphView('packetGraph', 'packetCanvas');
+	packetGraph.updateEndDate();
 }
 
 function getDeskStream(stream){
@@ -247,8 +289,8 @@ function handleAnswerError(err){
 
 function getAnswer(desc){
 	pc.setLocalDescription(desc);
-	bandwidth.disabled = false;
 
+	optBw.disabled = false;
 	//send answer sdp
 	sendMessage(roomid, desc);
 }
@@ -260,6 +302,16 @@ function getOffer(desc){
 	//send offer sdp
 	sendMessage(roomid, offerdesc);	
 
+}
+
+function receivemsg(e){
+	var msg = e.data;
+	if(msg){
+		console.log(msg);
+		chat.value += "->" + msg + "\r\n";
+	}else{
+		console.error('received msg is null');
+	}
 }
 
 function createPeerConnection(){
@@ -283,6 +335,16 @@ function createPeerConnection(){
 			}else{
 				console.log('this is the end candidate');
 			}
+		}
+
+		pc.ondatachannel = e=> {
+			if(!dc){
+				dc = e.channel;
+				dc.onmessage = receivemsg; 
+				dc.onopen = dataChannelStateChange;
+				dc.onclose = dataChannelStateChange;
+			}
+
 		}
 
 		pc.ontrack = getRemoteStream;
@@ -358,93 +420,110 @@ function leave() {
 
 	socket.emit('leave', roomid); //notify server
 
+	dc.close();
+	dc = null;
+
 	hangup();
 	closeLocalMedia();
 
 	btnConn.disabled = false;
 	btnLeave.disabled = true;
-	bandwidth.disabled = true;
+	optBw.disabled = true;
+
+	send_txt.disabled = true;
+	send.disabled = true;
 }
 
-function change_bw(){
-	bandwidth.disabled = true;
-	var bw = bandwidth.options[bandwidth.selectedIndex].value;
+function chang_bw()
+{
+	optBw.disabled = true;
+	var bw = optBw.options[optBw.selectedIndex].value;
 
 	var vsender = null;
 	var senders = pc.getSenders();
 
-	senders.forEach(sender => {
+	senders.forEach( sender => {
 		if(sender && sender.track.kind === 'video'){
-			vsender = sender;
-		}
+			vsender = sender;	
+		}	
 	});
 
 	var parameters = vsender.getParameters();
-	
 	if(!parameters.encodings){
-		parameters.encodings=[{}];	
+		return;	
 	}
 
 	if(bw === 'unlimited'){
-		delete parameters.encodings[0].maxBitrate;
-	}else{
-		parameters.encodings[0].maxBitrate = bw * 1000;	
+		return;	
 	}
+
+	parameters.encodings[0].maxBitrate = bw * 1000;
 
 	vsender.setParameters(parameters)
 		.then(()=>{
-			bandwidth.disabled = false;	
+			optBw.disabled = false;
+			console.log('Successed to set parameters!');
 		})
 		.catch(err => {
-			console.error(err)
-		});
-
-	return;
+			console.error(err);
+		})
 }
 
 // query getStats every second
-// window.setInterval(() => {
-//   if (!pc1) {
-//     return;
-//   }
-//   const sender = pc1.getSenders()[0];
-//   if (!sender) {
-//     return;
-//   }
-//   sender.getStats().then(res => {
-//     res.forEach(report => {
-//       let bytes;
-//       let packets;
-//       if (report.type === 'outbound-rtp') {
-//         if (report.isRemote) {
-//           return;
-//         }
-//         const now = report.timestamp;
-//         bytes = report.bytesSent;
-//         packets = report.packetsSent;
-//         if (lastResult && lastResult.has(report.id)) {
-//           // calculate bitrate
-//           const bitrate = 8 * (bytes - lastResult.get(report.id).bytesSent) /
-//             (now - lastResult.get(report.id).timestamp);
+window.setInterval(() => {
+  if (!pc) {
+    return;
+  }
+  const sender = pc.getSenders()[0];
+  if (!sender) {
+    return;
+  }
+  sender.getStats().then(res => {
+    res.forEach(report => {
+      let bytes;
+      let packets;
+      if (report.type === 'outbound-rtp') {
+        if (report.isRemote) {
+          return;
+        }
+        const now = report.timestamp;
+        bytes = report.bytesSent;
+        packets = report.packetsSent;
+        if (lastResult && lastResult.has(report.id)) {
+          // calculate bitrate
+          const bitrate = 8 * (bytes - lastResult.get(report.id).bytesSent) /
+            (now - lastResult.get(report.id).timestamp);
 
-//           // append to chart
-//           bitrateSeries.addPoint(now, bitrate);
-//           bitrateGraph.setDataSeries([bitrateSeries]);
-//           bitrateGraph.updateEndDate();
+          // append to chart
+          bitrateSeries.addPoint(now, bitrate);
+          bitrateGraph.setDataSeries([bitrateSeries]);
+          bitrateGraph.updateEndDate();
 
-//           // calculate number of packets and append to chart
-//           packetSeries.addPoint(now, packets -
-//             lastResult.get(report.id).packetsSent);
-//           packetGraph.setDataSeries([packetSeries]);
-//           packetGraph.updateEndDate();
-//         }
-//       }
-//     });
-//     lastResult = res;
-//   });
-// }, 1000);
+          // calculate number of packets and append to chart
+          packetSeries.addPoint(now, packets -
+            lastResult.get(report.id).packetsSent);
+          packetGraph.setDataSeries([packetSeries]);
+          packetGraph.updateEndDate();
+        }
+      }
+    });
+    lastResult = res;
+  });
+}, 1000);
 
+function sendText(){
+	var data = send_txt.value;
+	if(data != null){
+		dc.send(data);
+	}
+
+	//更好的展示
+	send_txt.value = "";
+	chat.value += '<- ' + data + '\r\n';
+}
 
 btnConn.onclick = connSignalServer
 btnLeave.onclick = leave;
-bandwidth.onchange = change_bw;
+optBw.onchange = chang_bw;
+
+btnSend.onclick = sendText;
